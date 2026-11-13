@@ -1,0 +1,8 @@
+interface:
+  display_name: "GCP Colab Operator"
+  short_description: "Compare costs, rent and manage GCP CPU/GPU VMs"
+  brand_color: "#4285F4"
+  default_prompt: "Use $gcp-colab-operator to compare Spot and Standard total costs, rent the cheaper suitable GCP VM, run the task, and tear it down afterward."
+
+policy:
+  allow_implicit_invocation: true
