@@ -1,6 +1,6 @@
-"""gcolab: Native Windows Colab-like CLI for Google Cloud Compute Engine."""
+"""gcolab: Cross-platform CLI for Google Cloud Compute Engine."""
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 MANAGED_LABEL_KEY = "managed-by"
 MANAGED_LABEL_VALUE = "gcolab"

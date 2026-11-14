@@ -1,4 +1,4 @@
-"""Native Windows Google Cloud authentication, project discovery, and gcloud locator."""
+"""Google Cloud authentication and CLI discovery on Windows, macOS, and Linux."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 from typing import Any
 
 import google.auth
@@ -22,15 +23,32 @@ class AuthConfigError(RuntimeError):
 
 
 def find_gcloud_binary() -> str | None:
-    """Locate gcloud.cmd / gcloud on Windows PATH or standard SDK directories."""
+    """Locate the host's Google Cloud CLI, including common SDK installations."""
     env_override = os.environ.get("GCOLAB_GCLOUD_BIN")
-    if env_override and pathlib.Path(env_override).exists():
-        return str(pathlib.Path(env_override).resolve())
+    if env_override:
+        path = pathlib.Path(env_override).expanduser()
+        if path.is_file() and (sys.platform == "win32" or os.access(path, os.X_OK)):
+            return str(path.resolve())
+        return None
 
-    for candidate in ("gcloud.cmd", "gcloud"):
+    windows = sys.platform == "win32"
+    for candidate in (("gcloud.cmd", "gcloud") if windows else ("gcloud",)):
         hit = shutil.which(candidate)
         if hit:
             return hit
+
+    if not windows:
+        well_known = [
+            pathlib.Path.home() / "google-cloud-sdk" / "bin" / "gcloud",
+            pathlib.Path("/opt/homebrew/bin/gcloud"),
+            pathlib.Path("/opt/homebrew/share/google-cloud-sdk/bin/gcloud"),
+            pathlib.Path("/usr/local/bin/gcloud"),
+            pathlib.Path("/usr/local/share/google-cloud-sdk/bin/gcloud"),
+            pathlib.Path("/usr/lib/google-cloud-sdk/bin/gcloud"),
+            pathlib.Path("/opt/google-cloud-sdk/bin/gcloud"),
+            pathlib.Path("/snap/bin/gcloud"),
+        ]
+        return next((str(p) for p in well_known if p.is_file() and os.access(p, os.X_OK)), None)
 
     local_app = os.environ.get("LOCALAPPDATA", "")
     user_profile = os.environ.get("USERPROFILE", "")
@@ -47,7 +65,7 @@ def find_gcloud_binary() -> str | None:
         pathlib.Path(r"D:\google-cloud-sdk\bin\gcloud.cmd"),
     ]
     for path in well_known:
-        if path.exists():
+        if path.is_file():
             return str(path)
     return None
 
@@ -56,8 +74,11 @@ def adc_file_path() -> pathlib.Path:
     explicit = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if explicit:
         return pathlib.Path(explicit).expanduser()
+    sdk_config = os.environ.get("CLOUDSDK_CONFIG")
+    if sdk_config:
+        return pathlib.Path(sdk_config).expanduser() / "application_default_credentials.json"
     appdata = os.environ.get("APPDATA")
-    if appdata:
+    if sys.platform == "win32" and appdata:
         return pathlib.Path(appdata) / "gcloud" / "application_default_credentials.json"
     return pathlib.Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
 

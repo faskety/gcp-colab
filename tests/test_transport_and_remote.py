@@ -1,4 +1,4 @@
-"""Tests for Windows tarfile archive builder and embedded remote daemon/runner scripts."""
+"""Tests for the cross-platform tarfile archive builder and embedded remote daemon/runner scripts."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from gcolab.remote_agent import REMOTE_DAEMON_PY, REMOTE_JOB_RUNNER_PY, render_s
 from gcolab.transport import build_tar_gz_bytes
 
 
-def test_windows_tar_builder_excludes_secrets_and_normalizes_shell_crlf(tmp_path: pathlib.Path) -> None:
+def test_tar_builder_excludes_secrets_and_normalizes_shell_crlf(tmp_path: pathlib.Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "config").write_text("secret", encoding="utf-8")
     (tmp_path / "__pycache__").mkdir()

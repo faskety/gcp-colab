@@ -1,4 +1,4 @@
-"""Native Windows OpenSSH (SCP/SFTP + resumable SSH stream) transport & IAP tunnel bridge."""
+"""Cross-platform OpenSSH transfers and IAP tunnels to Linux Compute Engine VMs."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import secrets
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tarfile
@@ -210,26 +211,39 @@ def session_host_key_alias(session: SessionRecord, host: str, port: int) -> str:
 
 
 def find_ssh_binary(tool: str = "ssh") -> str:
-    exe_name = f"{tool}.exe" if os.name == "nt" else tool
-    system32_candidate = pathlib.Path(r"C:\Windows\System32\OpenSSH") / exe_name
-    if system32_candidate.exists():
-        return str(system32_candidate)
+    windows = sys.platform == "win32"
+    exe_name = f"{tool}.exe" if windows else tool
+    if windows:
+        system_root = pathlib.Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        system32_candidate = system_root / "System32" / "OpenSSH" / exe_name
+        if system32_candidate.is_file():
+            return str(system32_candidate)
     hit = shutil.which(exe_name) or shutil.which(tool)
     if hit:
         return hit
-    raise TransportError(
-        f"Windows OpenSSH tool '{exe_name}' not found. Enable OpenSSH Client in Windows Optional Features."
+    if not windows:
+        for directory in ("/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"):
+            candidate = pathlib.Path(directory) / tool
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    hint = (
+        "Enable OpenSSH Client in Windows Optional Features."
+        if windows else "Install OpenSSH (openssh-client on Debian/Ubuntu, openssh-clients on Fedora) and add it to PATH."
     )
+    raise TransportError(f"OpenSSH tool '{exe_name}' not found. {hint}")
 
 
 def ensure_ssh_keypair(key_path: pathlib.Path | None = None) -> tuple[pathlib.Path, str]:
     """Ensure dedicated Ed25519 SSH keypair exists; return (private_key_path, public_key_text)."""
     priv = (key_path or (pathlib.Path.home() / ".ssh" / "gcolab_ed25519")).expanduser().resolve()
-    pub = priv.with_suffix(".pub")
-    priv.parent.mkdir(parents=True, exist_ok=True)
-    if not priv.exists() or not pub.exists():
-        priv.unlink(missing_ok=True)
-        pub.unlink(missing_ok=True)
+    pub = pathlib.Path(f"{priv}.pub")
+    priv.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if os.name != "nt":
+        if priv.parent == (pathlib.Path.home() / ".ssh").resolve():
+            priv.parent.chmod(0o700)
+        if priv.exists():
+            priv.chmod(0o600)
+    if not priv.exists():
         keygen = find_ssh_binary("ssh-keygen")
         res = subprocess.run(
             [keygen, "-t", "ed25519", "-N", "", "-C", "gcolab", "-f", str(priv)],
@@ -240,6 +254,17 @@ def ensure_ssh_keypair(key_path: pathlib.Path | None = None) -> tuple[pathlib.Pa
         )
         if res.returncode != 0 or not pub.exists():
             raise TransportError(f"ssh-keygen failed: {res.stderr or res.stdout}")
+    elif not pub.exists():
+        res = subprocess.run(
+            [find_ssh_binary("ssh-keygen"), "-y", "-P", "", "-f", str(priv)],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        if res.returncode != 0:
+            raise TransportError(f"Could not derive SSH public key: {res.stderr or res.stdout}")
+        pub.write_text(res.stdout.strip() + "\n", encoding="utf-8")
+    if os.name != "nt":
+        priv.chmod(0o600)
+        pub.chmod(0o644)
     return priv, pub.read_text(encoding="utf-8").strip()
 
 
@@ -278,7 +303,7 @@ def open_ssh_endpoint(session: SessionRecord) -> Iterator[tuple[str, int]]:
     if not gcloud_bin:
         raise TransportError(
             f"Session {session.name!r} uses IAP tunnel mode (or has no external IP), "
-            "which requires Google Cloud CLI (gcloud) installed on Windows."
+            "which requires Google Cloud CLI (gcloud) installed on the local host."
         )
 
     local_port = _pick_free_local_port()
@@ -328,7 +353,7 @@ def _common_openssh_options(
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-o",
-        f"UserKnownHostsFile={known_hosts}",
+        f'UserKnownHostsFile="{known_hosts}"',
         "-o",
         f"HostKeyAlias={host_key_alias}",
         "-o",
@@ -516,6 +541,15 @@ def _is_ignored(rel_posix: str, name: str, is_dir: bool, extra_patterns: list[st
     return False
 
 
+def _remote_file_mode(path: pathlib.Path) -> int:
+    """Preserve POSIX permissions and provide executable shell scripts on every host."""
+    if path.suffix.lower() in (".sh", ".bash"):
+        return 0o755
+    if os.name != "nt":
+        return stat.S_IMODE(path.stat().st_mode) & 0o777
+    return 0o644
+
+
 def _populate_tar(
     tf: tarfile.TarFile,
     src: pathlib.Path,
@@ -538,7 +572,7 @@ def _populate_tar(
             ti = tarfile.TarInfo(name=arc)
             ti.size = st.st_size
             ti.mtime = int(st.st_mtime)
-            ti.mode = 0o644
+            ti.mode = _remote_file_mode(src)
             with src.open("rb") as fh:
                 tf.addfile(ti, fh)
         return 1
@@ -573,7 +607,7 @@ def _populate_tar(
                     ti = tarfile.TarInfo(name=rel_posix)
                     ti.size = st.st_size
                     ti.mtime = int(st.st_mtime)
-                    ti.mode = 0o644
+                    ti.mode = _remote_file_mode(fpath)
                     with fpath.open("rb") as fh:
                         tf.addfile(ti, fh)
                 file_count += 1
@@ -588,7 +622,7 @@ def build_tar_gz_bytes(
     respect_gitignore: bool = True,
     single_file_arcname: str | None = None,
 ) -> tuple[bytes, int]:
-    """Pack a local Windows directory or file into an in-memory POSIX .tar.gz buffer."""
+    """Pack a local directory or file into an in-memory POSIX .tar.gz buffer."""
     src = source_path.expanduser().resolve()
     if not src.exists():
         raise FileNotFoundError(f"Local path does not exist: {src}")
@@ -1165,7 +1199,7 @@ def upload_path(
         file_sha, file_size = sha256_file(payload_path)
         stage_id = hashlib.sha256(f"{final_remote}:{file_sha}".encode("utf-8")).hexdigest()[:12]
         remote_part = f"{target_dir.rstrip('/')}/.gcolab-stage-{stage_id}.part"
-        mode_octal = "0755" if is_shell else "0644"
+        mode_octal = f"{_remote_file_mode(src):04o}"
 
         used_method = _transfer_file_to_remote_staged(
             store,
@@ -1471,6 +1505,8 @@ def update_ssh_config_entry(store: StateStore, session: SessionRecord) -> str:
         )
         blocks = (blocks.rstrip() + "\n\n" + block).lstrip()
     store.ssh_config_path.write_text(blocks, encoding="utf-8")
+    if os.name != "nt":
+        store.ssh_config_path.chmod(0o600)
     return host_alias
 
 

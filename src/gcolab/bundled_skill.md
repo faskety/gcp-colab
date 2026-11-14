@@ -1,12 +1,12 @@
 ---
 name: gcp-colab-operator
 description: >-
-  Provision, sync, execute, monitor, and auto-destroy Google Cloud Compute Engine GPU/CPU servers natively on Windows via the `gcolab` CLI (without WSL), selecting Spot or Standard by estimated total cost. Use when the user wants to rent a GCP server or GPU (T4, L4, V100, A100, A100-80GB, H100), run Python/shell/notebook or SkyPilot-style Task YAML jobs on Google Cloud, sync local code directories, compare rental costs or capacity, or automatically tear down compute after runs. Hand off project creation, billing linkage, API enablement, and IAM policy administration to the `Google Cloud Developer` plugin skills (`google-cloud-recipe-onboarding`, `google-cloud-recipe-auth`, `gcloud`).
+  Provision, sync, execute, monitor, and auto-destroy Google Cloud Compute Engine GPU/CPU servers from Windows, macOS, or Linux via the `gcolab` CLI, selecting Spot or Standard by estimated total cost. Use when the user wants to rent a GCP server or GPU (T4, L4, V100, A100, A100-80GB, H100), run Python/shell/notebook or SkyPilot-style Task YAML jobs on Google Cloud, sync local code directories, compare rental costs or capacity, or automatically tear down compute after runs. Hand off project creation, billing linkage, API enablement, and IAM policy administration to the `Google Cloud Developer` plugin skills (`google-cloud-recipe-onboarding`, `google-cloud-recipe-auth`, `gcloud`).
 ---
 
-# GCP Colab Operator (`gcolab` — Native Windows)
+# GCP Colab Operator (`gcolab` — Windows, macOS, Linux)
 
-Operate Google Cloud Compute Engine VMs with Colab-like simplicity and SkyPilot-style cross-zone failover, tagged job queues, SHA-256 deliverable verification, and idle autostop/autodown — **100% natively on Windows** (Python + Windows OpenSSH + Google Cloud SDK, zero WSL or background local daemon).
+Operate Google Cloud Compute Engine VMs with Colab-like simplicity and SkyPilot-style cross-zone failover, tagged job queues, SHA-256 deliverable verification, and idle autostop/autodown — **native Windows, macOS, and Linux clients** (Python + OpenSSH + Google Cloud SDK, with no background local daemon).
 
 ## Mental Model (Read First)
 
@@ -26,11 +26,18 @@ Operate Google Cloud Compute Engine VMs with Colab-like simplicity and SkyPilot-
 - Verify that the live GCE instance's `scheduling.provisioningModel` matches the selected `SPOT` or `STANDARD` model (`gcolab new -o json` and `gcolab status -o json` report the live `provisioning_model`). The machine type name and local session flags are not a substitute for this cloud check.
 - Use `--down` and a task-appropriate `--max-hours` for temporary rentals. Finish a successful login test by immediately deleting the VM; the timers provide a fallback and are not a reason to leave it running.
 
+## Local Host Setup
+
+- Use Python 3.11 or newer, `uv`, OpenSSH (`ssh`, `scp`, and `ssh-keygen`), and the Google Cloud CLI. Install from the repository with `uv tool install --editable . --force` on all three systems.
+- Windows uses the native OpenSSH Client and `gcloud.cmd`. macOS and Linux use executables on `PATH`; SDK discovery also checks common Homebrew, system, and `~/google-cloud-sdk` locations. `GCOLAB_GCLOUD_BIN` can point to a custom executable.
+- ADC defaults to `%APPDATA%/gcloud/application_default_credentials.json` on Windows and `~/.config/gcloud/application_default_credentials.json` on macOS/Linux. Respect `GOOGLE_APPLICATION_CREDENTIALS` and `CLOUDSDK_CONFIG` overrides. Local gcolab state remains in `~/.config/gcolab` unless `GCOLAB_HOME` is set.
+- The examples use single-line commands valid in PowerShell, bash, and zsh. Match any additional shell syntax to the local shell. The remote VM runs Linux on every client platform, so build uploaded executables for Linux.
+
 ## Step 0: Preflight & Bootstrap
 
 Before provisioning compute in a new session, run:
 
-```powershell
+```sh
 gcolab doctor -o json
 ```
 
@@ -45,7 +52,7 @@ gcolab doctor -o json
 
 For a request to rent, log in, and immediately cancel, compare the cost of small CPU instances and use the cheaper suitable option without uploading the local project. The following example applies when the calculation selects Spot; add `--no-spot` when it selects Standard:
 
-```powershell
+```sh
 gcolab new --project <PROJECT_ID> -s <UNIQUE_SESSION> --machine-type <SELECTED_MACHINE_TYPE> --disk-gb 10 --disk-type pd-standard --region <SELECTED_REGION> --idle 5 --down --max-hours 0.25 -o json
 gcolab ssh --project <PROJECT_ID> -s <UNIQUE_SESSION> -- "uname -srm && whoami && nproc && free -m && df -h /workspace && systemctl is-active gcolab-autostop.timer"
 gcolab down --project <PROJECT_ID> -s <UNIQUE_SESSION> -o json
@@ -57,12 +64,9 @@ Choose a machine compatible with the selected provisioning model, boot disk, and
 
 Validates the local target *before* allocating a VM, provisions the selected Spot or Standard option with cross-zone failover, syncs `--workdir`, runs setup + script/YAML, verifies required deliverables via SHA-256 (`--download` / YAML `outputs:`), and tears down the VM + boot disk with a full verification receipt:
 
-```powershell
+```sh
 # Example when the cost comparison selects a Spot L4; use --no-spot for Standard
-gcolab run --gpu L4 --spot --workdir . `
-  --download /workspace/outputs:./outputs `
-  --optional-download /workspace/debug.log:./debug.log `
-  train.py --epochs 5
+gcolab run --gpu L4 --spot --workdir . --download /workspace/outputs:./outputs --optional-download /workspace/debug.log:./debug.log train.py --epochs 5
 
 # Run a SkyPilot-compatible Task YAML (supports setup:, envs:, file_mounts:, outputs:, optional_outputs:, run:)
 gcolab run task.yaml
@@ -76,7 +80,7 @@ gcolab run task.yaml
 
 Use when iterating across multiple stages, coordinating subagents, or running long detached builds/trainings. This example assumes the cost comparison selected Spot; add `--no-spot` on `capacity` and `new` when Standard is selected:
 
-```powershell
+```sh
 # 1. Check live GCP Spot capacity scores (hourly figures are reference estimates)
 gcolab capacity --gpu L4 --spot -o json
 
@@ -110,7 +114,7 @@ gcolab down -o json
 - **Pause vs Destroy**: `gcolab stop -s exp1` stops compute billing while preserving the boot disk (disk GB-month storage still bills) and resumes via `gcolab start -s exp1`. `gcolab down -s exp1` deletes both the VM and its `autoDelete` boot disk and verifies both return `404`.
 - **Multi-agent state safety**: Local `sessions.json` updates and remote job ID allocations are protected by OS file locks (`state.lock` / `flock`). When subagents operate completely separate sessions outside a shared bound workspace, pass `-s <session>` explicitly or `--config <scratch_sessions.json>`.
 - **Audit orphaned VMs across all GCP zones**:
-  ```powershell
+  ```sh
   gcolab cleanup --dry-run -o json
   ```
 

@@ -1,4 +1,4 @@
-"""gcolab CLI entrypoint: Native Windows 'Colab + SkyPilot' workflow for GCP Compute Engine."""
+"""gcolab CLI entrypoint for GCP Compute Engine on Windows, macOS, and Linux."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import pathlib
 import secrets
 import shlex
 import sys
+import subprocess
 import time
 from typing import Any
 
@@ -587,14 +588,19 @@ def cmd_doctor(args: argparse.Namespace, store: StateStore) -> int:
     ssh_ok = False
     ssh_path = None
     scp_path = None
+    keygen_path = None
+    priv_key = None
+    ssh_error = None
     try:
         ssh_path = find_ssh_binary("ssh")
         scp_path = find_ssh_binary("scp")
+        keygen_path = find_ssh_binary("ssh-keygen")
+        priv_key, _ = ensure_ssh_keypair()
         ssh_ok = True
-    except TransportError:
+    except (TransportError, OSError, subprocess.SubprocessError) as exc:
+        ssh_error = str(exc)
         ssh_ok = False
 
-    priv_key, _ = ensure_ssh_keypair()
     binding = find_workspace_binding()
     proj_check: dict[str, Any] | None = None
     target_proj = args.project or (binding[1].get("project") if binding else None) or auth_info.get("resolved_project")
@@ -611,7 +617,9 @@ def cmd_doctor(args: argparse.Namespace, store: StateStore) -> int:
         "openssh_available": ssh_ok,
         "openssh_path": ssh_path,
         "scp_path": scp_path,
-        "gcolab_ssh_key": str(priv_key),
+        "ssh_keygen_path": keygen_path,
+        "openssh_error": ssh_error,
+        "gcolab_ssh_key": str(priv_key) if priv_key else None,
         "state_file": str(store.sessions_path),
         "workspace_binding": {"path": str(binding[0]), **binding[1]} if binding else None,
         **auth_info,
@@ -622,7 +630,7 @@ def cmd_doctor(args: argparse.Namespace, store: StateStore) -> int:
     else:
         lines = [
             f"gcolab v{__version__} environment check:",
-            f"  Windows OpenSSH : {'OK (' + str(ssh_path) + ')' if ssh_ok else 'MISSING'}",
+            f"  OpenSSH         : {'OK (' + str(ssh_path) + ')' if ssh_ok else 'UNAVAILABLE: ' + str(ssh_error)}",
             f"  gcloud CLI      : {'OK (' + str(auth_info['gcloud_path']) + ')' if auth_info['gcloud_installed'] else 'NOT FOUND'}",
             f"  ADC file        : {'EXISTS' if auth_info['adc_file_exists'] else 'MISSING'} ({auth_info['adc_file_path']})",
             f"  Credentials     : {'VALID (' + str(auth_info['auth_source']) + ')' if auth_info['credentials_valid'] else 'INVALID'}",
@@ -1686,7 +1694,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="gcolab",
-        description="Native Windows Colab-like CLI & SkyPilot-style orchestrator for GCP Compute Engine.",
+        description="Cross-platform Colab-like CLI & SkyPilot-style orchestrator for GCP Compute Engine.",
     )
     parser.add_argument("--project", default=None, help="Target Google Cloud project ID")
     parser.add_argument("--config", default=None, help="Custom sessions.json path for isolated agent runs")
@@ -1695,7 +1703,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("doctor", parents=[common], help="Verify Windows OpenSSH, gcloud, ADC auth, and GCP project")
+    sub.add_parser("doctor", parents=[common], help="Verify OpenSSH, gcloud, ADC auth, and GCP project")
 
     p_cfg = sub.add_parser("config", parents=[common], help="View or set default project/region/ssh-mode")
     cfg_sub = p_cfg.add_subparsers(dest="config_action", required=True)

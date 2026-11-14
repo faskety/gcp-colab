@@ -54,7 +54,7 @@ run: |
 | Field | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `name` | `string` | `run-<hex>` | Session name slug (`gcolab-<name>-<id>` on GCE). |
-| `workdir` | `string` | `null` | Relative (to YAML file) or absolute Windows folder synced to `/workspace`. |
+| `workdir` | `string` | `null` | Relative (to YAML file) or absolute local folder (Windows, macOS, or Linux) synced to `/workspace`. |
 | `resources.accelerators` | `string` | `null` | `<GPU>` or `<GPU>:<COUNT>`. Omit for CPU VM (`e2-standard-4` default, or set `resources.cpus`). |
 | `resources.cpus` | `int` | `4` | CPU count (`2, 4, 8, 16, 32`) when no GPU is requested. |
 | `resources.instance_type` | `string` | auto | Explicit GCE machine type (e.g. `g2-standard-16`, `n2-standard-16`, `c4-standard-8`). Gen 4 shapes auto-select `hyperdisk-balanced`. |

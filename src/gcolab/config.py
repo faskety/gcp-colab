@@ -183,8 +183,8 @@ class StateStore:
         self._lock_fd: int | None = None
 
     def ensure_dirs(self) -> None:
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.history_dir.mkdir(parents=True, exist_ok=True)
+        self.base_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.history_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     @contextlib.contextmanager
     def locked(self, timeout_s: float = 15.0) -> Iterator[None]:
@@ -199,7 +199,7 @@ class StateStore:
                 return
 
             self.ensure_dirs()
-            fd = os.open(str(self.lock_path), os.O_CREAT | os.O_RDWR, 0o666)
+            fd = os.open(str(self.lock_path), os.O_CREAT | os.O_RDWR, 0o600)
             try:
                 if os.fstat(fd).st_size == 0:
                     os.write(fd, b"0")
@@ -244,8 +244,13 @@ class StateStore:
         self.ensure_dirs()
         token = secrets.token_hex(3)
         tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.{token}.tmp")
-        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, ensure_ascii=False)
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def load_settings(self) -> dict[str, Any]:
         if not self.settings_path.exists():

@@ -14,16 +14,16 @@
 4. **Hardware `maxRunDuration` (`--max-hours`)**: Enforced by Google Compute Engine on Spot VMs and compatible Standard families (`N1`, `N2`, `C2`, `C3`, `G2`, `A2`, `A3`). On `E2` Standard shapes (which require `onHostMaintenance: MIGRATE` on GCE), `gcolab` automatically sets `MIGRATE` and relies on the VM-side `gcolab-autostop.timer` (`--idle` + `--down`).
 5. **Bounded Deliverable Protection on `gcolab run`**: If a workload exits `0` but a required `--download` / `outputs:` transfer fails, `gcolab run` returns exit code `3` and retains the VM for `--retain-on-download-error-mins` (default `30` min, with `--down` armed) so artifacts can be retrieved with `gcolab download` before deletion.
 
-## 3. Networking, Resumable Transfer & SSH Host Keys on Windows
+## 3. Networking, Resumable Transfer & SSH Host Keys
 
 - **Default (`--ssh-mode direct` with Ephemeral External IP)**:
   - Gives the VM outbound internet access (`pip`, `uv`, `git`, Hugging Face) without requiring a paid Cloud NAT gateway.
   - Locks inbound TCP port `22` (`gcolab-allow-ssh` targeting tag `gcolab-ssh` only) to **your current `/32` public IP + Google IAP `35.235.240.0/20`** — never `0.0.0.0/0` unless `--allow-any-ip` is explicitly passed.
 - **IAP Tunnel Mode (`--ssh-mode iap` or `--no-external-ip`)**:
-  - Opens a temporary localhost TCP bridge via `gcloud compute start-iap-tunnel` and runs OpenSSH `scp.exe` / `ssh.exe` through IAP.
+  - Opens a temporary localhost TCP bridge via `gcloud compute start-iap-tunnel` and runs the local OpenSSH `scp` / `ssh` clients through IAP.
   - Note: `--no-external-ip` omits public NAT IPs entirely; outbound internet inside the VM (`pip install`, GitHub) requires **Cloud NAT** on the target VPC subnet.
 - **Resumable Multi-Path Transfers & Stall Detection**:
-  - Single-file uploads and downloads use Windows OpenSSH `scp.exe` (SFTP protocol) on the first attempt and automatically switch to resumable byte-offset SSH chunked streaming (`stream`) on retry or partial resume.
+  - Single-file uploads and downloads use the local OpenSSH `scp` client (SFTP protocol) on the first attempt and automatically switch to resumable byte-offset SSH chunked streaming (`stream`) on retry or partial resume.
   - Directory `sync` and directory `download` stream disk-backed `.tar.gz` archives with separated `--connect-timeout` (`20s`), `--stall-timeout` (`90s` zero-progress watchdog), and `--timeout` (`3600s` ceiling), verifying SHA-256 before atomic rename/extraction.
 - **Per-Instance SSH Host Key Pinning**:
   - `gcolab` pins `HostKeyAlias` in `~/.config/gcolab/known_hosts` to `gcolab-<project>-<zone>-<instance_name>` rather than the raw ephemeral IP, so recycled GCE public IPs across separate rentals do not cause false host-key collisions while preserving host-key verification for the lifetime of each VM.
